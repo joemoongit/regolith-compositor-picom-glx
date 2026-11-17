@@ -40,19 +40,30 @@ if [[ "${1-}" == "--foreground" ]]; then
   exec /usr/bin/picom --config "$config" $(picom_args "$config")
 fi
 
+# A secondary session of the same user (see regolith-session-x11-launch in
+# regolith-session) runs picom as a daemon: the user service belongs to the
+# first session and would move to this display.
 use_unit=
-if [[ -n "${XDG_RUNTIME_DIR-}" && -n "${DISPLAY-}" ]] \
+if [[ -z "${REGOLITH_SESSION_SECONDARY-}" && -n "${XDG_RUNTIME_DIR-}" && -n "${DISPLAY-}" ]] \
     && systemctl --user cat "$UNIT" >/dev/null 2>&1; then
   use_unit=1
   systemctl --user stop "$UNIT"
 fi
 
-# Replace only this user's picom. Another user's picom (another session on
-# the machine) can't be signalled and is not ours to replace; waiting for it
-# to exit would never end. Give up waiting after 5 seconds and kill what is
-# left, so a picom that ignores SIGTERM can't block startup either.
+# Replace only this user's picom on this display. Another user's picom
+# (another session on the machine) can't be signalled and is not ours to
+# replace; waiting for it to exit would never end. The same user can also have
+# a second session on another display, whose picom must keep running. Give up
+# waiting after 5 seconds and kill what is left, so a picom that ignores
+# SIGTERM can't block startup either.
 own_picom() {
-  pgrep -u "$(id -u)" -x picom
+  local pid
+  for pid in $(pgrep -u "$(id -u)" -x picom); do
+    if tr '\0' '\n' 2>/dev/null < "/proc/$pid/environ" \
+        | grep -qxF "DISPLAY=${DISPLAY-}"; then
+      echo "$pid"
+    fi
+  done
 }
 
 compositor_PID=$(own_picom)
